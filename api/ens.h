@@ -53,7 +53,7 @@
  * Log levels.
  */
 #define ENS_LOG_LEVEL_NONE  0   //!< No logging.
-#define ENS_LOG_LEVEL_FATAL 1   //!< Fata logging.
+#define ENS_LOG_LEVEL_FATAL 1   //!< Fatal logging.
 #define ENS_LOG_LEVEL_ERROR 2   //!< Error logging.
 #define ENS_LOG_LEVEL_WARN  3   //!< Warn logging.
 #define ENS_LOG_LEVEL_INFO  4   //!< Info logging.
