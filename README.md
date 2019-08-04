@@ -5,19 +5,21 @@ A library that provides application level email logging. The main goal of
 this library is to provide functionality to programmers for sending log
 type emails in their programs. The library handles the logic which
 determines  when emails should be sent and can operate in two modes as
-described below:
+described in the next section.
+
+ENS is configured by groupings. Each group has their own set of characteristics so emails can be controlled in each group individually.
 
 ---------------------------------------------------------------------------
 ENS_GROUP_MODE_DROP
 ---------------------------------------------------------------------------
-Sends an email at most, every interval seconds at which the group is
+Sends an email at most, every "interval" seconds at which the group is
 configured. Any email that is attempted to be sent before the interval has
 expired is ingored.
 
 ---------------------------------------------------------------------------
 ENS_GROUP_MODE_COLLECT
 ---------------------------------------------------------------------------
-Sends an email at most, every interval seconds at which the group is
+Sends an email at most, every "interval" seconds at which the group is
 configured. Any email that is attempted to be sent before the interval has
 expired is queued and when the timer expires, an email is sent with all the
 queued emails concatenated into a single email.
@@ -81,4 +83,5 @@ int main(int argc, char **argv) {
     ens_free(ens);
     return 0;
 }
+
 ```
