@@ -53,7 +53,7 @@ The MIT License (MIT). Please see [LICENSE](LICENSE) for more information.
 ## Examples
 Send an email only every 10 seconds
 
-```
+```c
 #include <ens.h>
 
 int main(int argc, char **argv) {
@@ -76,7 +76,7 @@ int main(int argc, char **argv) {
 
 Send an email only every 10 seconds. However, any email that was attempted to be sent before the timeout expires is queued and concatenated into one big email.
 
-```
+```c
 #include <ens.h>
 
 int main(int argc, char **argv) {
