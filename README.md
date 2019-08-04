@@ -42,6 +42,8 @@ gcc -o myprogram -lens mysource.c
 Send an email only every 10 seconds
 
 ```
+#include <ens.h>
+
 int main(int argc, char **argv) {
     ens_t *ens;
 
@@ -63,6 +65,8 @@ int main(int argc, char **argv) {
 Send an email only every 10 seconds. However, any email that was attempted to be sent before the timeout expires is queued and concatenated into one big email.
 
 ```
+#include <ens.h>
+
 int main(int argc, char **argv) {
     ens_t *ens;
 
