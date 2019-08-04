@@ -625,7 +625,6 @@ ens_group_send(ens_t *ens, ens_group_id_t id, const char *subject, const char *b
     }
 
     now = time(NULL);
-printf("%d, %ld %ld %u\n", group->id, now, group->expires, queue_size(group->emails));
     if (group->mode == ENS_GROUP_MODE_DROP && queue_size(group->emails) > 0) {
         ret = ENS_ERROR_NOT_READY;
         goto done;

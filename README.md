@@ -1,28 +1,19 @@
 # libens
 Email Notification System
 
-A library that provides application level email logging. The main goal of
-this library is to provide functionality to programmers for sending log
-type emails in their programs. The library handles the logic which
-determines  when emails should be sent and can operate in two modes as
-described in the next section.
+A library that provides application level email logging. The main goal of this library is to provide functionality to programmers for sending log type emails in their programs. The library handles the logic which determines  when emails should be sent and can operate in two modes as described in the next section.
 
 ENS is configured by groupings. Each group has their own set of characteristics so emails can be controlled in each group individually.
 
 ---------------------------------------------------------------------------
 ENS_GROUP_MODE_DROP
 ---------------------------------------------------------------------------
-Sends an email at most, every "interval" seconds at which the group is
-configured. Any email that is attempted to be sent before the interval has
-expired is ingored.
+Sends an email at most, every "interval" seconds at which the group is configured. Any email that is attempted to be sent before the interval has expired is ignored.
 
 ---------------------------------------------------------------------------
 ENS_GROUP_MODE_COLLECT
 ---------------------------------------------------------------------------
-Sends an email at most, every "interval" seconds at which the group is
-configured. Any email that is attempted to be sent before the interval has
-expired is queued and when the timer expires, an email is sent with all the
-queued emails concatenated into a single email.
+Sends an email at most, every "interval" seconds at which the group is configured. Any email that is attempted to be sent before the interval has expired is queued and when the timer expires, an email is sent with all the queued emails concatenated into a single email.
 
 ---------------------------------------------------------------------------
 
@@ -30,7 +21,7 @@ queued emails concatenated into a single email.
 ENS uses libcurl internally to send emails.
 
 ### Installing
-Installation is done by using the Makefile in the source directory.
+Installation is done by using the Makefile in the source directory. By default, the library is installed in /usr/local/lib and the header is stored in /usr/local/include.
 ```
 cd src/
 make
@@ -46,6 +37,9 @@ Documentation is handled by Doxygen and can be built using the Makefile in the d
 cd doc/
 Make
 ```
+
+## TODO
+1) Support Windoze. I'll need to write wrappers for pthread.
 
 ## License
 The MIT License (MIT). Please see [LICENSE](LICENSE) for more information.
