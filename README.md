@@ -47,7 +47,7 @@ cd doc/
 Make
 ```
 
-##License
+## License
 The MIT License (MIT). Please see [LICENSE](LICENSE) for more information.
 
 ## Examples
