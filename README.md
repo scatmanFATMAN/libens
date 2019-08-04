@@ -30,13 +30,25 @@ queued emails concatenated into a single email.
 ENS uses libcurl internally to send emails.
 
 ### Installing
+Installation is done by using the Makefile in the source directory.
 ```
+cd src/
 make
 make install
 ```
 
 ## Linkage
 gcc -o myprogram -lens mysource.c
+
+## Documentation
+Documentation is handled by Doxygen and can be built using the Makefile in the documentation directory. Doxygen will generate HTML files.
+```
+cd doc/
+Make
+```
+
+##License
+The MIT License (MIT). Please see [LICENSE](LICENSE) for more information.
 
 ## Examples
 Send an email only every 10 seconds
