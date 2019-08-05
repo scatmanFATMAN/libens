@@ -3,7 +3,6 @@ name=libens.so
 obj=alist.o buffer.o ens.o queue.o
 
 cc=gcc
-#cflags=-D_GNU_SOURCE -fPIC -Wall -g
 cflags=`curl-config --cflags` -fPIC -Wall -D_GNU_SOURCE -g
 ldflags=`curl-config --libs` -lpthread -shared
 

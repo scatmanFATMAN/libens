@@ -106,8 +106,10 @@ main(int argc, char **argv) {
         exit(EXIT_FAILURE);
     }
 
+    printf("Sending group 1 (collect) email, which should be the only email for the next 5 seconds\n");
     ens_group_send(ens, 1, "Group 1: Collect", "This should be the only email for the next 5 secoods");
 
+    printf("Sending group 2 (drop) email and 5 more right after. Only the first email should go through\n");
     ens_group_send(ens, 2, "Group 2: Drop", "This should be the only email even after attempting to send a few more immediately sine they're being dropped");
     ens_group_send(ens, 2, "Group 2: Drop", "drop me");
     ens_group_send(ens, 2, "Group 2: Drop", "drop me");
@@ -115,7 +117,8 @@ main(int argc, char **argv) {
     ens_group_send(ens, 2, "Group 2: Drop", "drop me");
     ens_group_send(ens, 2, "Group 2: Drop", "drop me");
 
-    usleep(1000 * 3);
+    usleep(1000 * 3000);
+    printf("Sending group 1 (collection) 3 emails, which should all be concatenated into a single email\n");
     ens_group_send(ens, 1, "Group 1: Collect", "There should be 3 emails in this group now. This is email 1");
     ens_group_send(ens, 1, "Group 1: Collect", "There should be 3 emails in this group now. This is email 2");
     ens_group_send(ens, 1, "Group 1: Collect", "There should be 3 emails in this group now. This is email 3");

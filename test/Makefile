@@ -15,4 +15,4 @@ $(name): $(obj)
 	$(cc) -o $@ -c $< $(cflags)
 
 clean:
-	rm -f $(obj) $(name)
+	rm -f $(obj) $(name) *.txt

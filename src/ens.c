@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdbool.h>
 #include <unistd.h>
 #include <string.h>
@@ -25,10 +26,15 @@
 #define ENS_PATH_MAX_LEN     255
 
 typedef struct {
+    uint64_t emails_sent;
+    uint64_t emails_total;
+} ens_group_stats_t;
+
+typedef struct {
     ens_group_id_t id;
     int mode;
     time_t interval;
-    time_t expires;
+    volatile time_t expires;
     alist_t *to;
     char host[ENS_HOST_MAX_LEN - 7 + 1]; //save from for smtp://
     char from[ENS_FROM_MAX_LEN + 1];
@@ -36,7 +42,9 @@ typedef struct {
     char password[ENS_PASSWORD_MAX_LEN + 1];
     FILE *f;
     char f_path[ENS_PATH_MAX_LEN + 1];
+    ens_group_stats_t stats;
     queue_t *emails;
+    pthread_mutex_t emails_mutex;
 } ens_group_t;
 
 struct ens_t {
@@ -45,9 +53,9 @@ struct ens_t {
     void *log_user_data;
     volatile bool running;
     pthread_t thread;
-    pthread_mutex_t groups_mutex;
     char ca_path[ENS_PATH_MAX_LEN + 1];
     alist_t *groups;
+    pthread_rwlock_t groups_lock;
 };
 
 typedef struct {
@@ -91,6 +99,8 @@ ens_group_free(ens_group_t *group) {
         fclose(group->f);
     }
 
+    pthread_mutex_destroy(&group->emails_mutex);
+
     //make sure we zero out the memory before free'ing since it's possible we have usernames and passwords in memory
     memset(group, 0, sizeof(*group));
     free(group);
@@ -120,6 +130,11 @@ ens_group_init(ens_t *ens) {
     }
 
     if (mlock(group->password, sizeof(group->password)) != 0) {
+        ens_group_free(group);
+        return NULL;
+    }
+
+    if (pthread_mutex_init(&group->emails_mutex, NULL) != 0) {
         ens_group_free(group);
         return NULL;
     }
@@ -172,7 +187,7 @@ ens_free(ens_t *ens) {
         alist_free(ens->groups);
     }
 
-    pthread_mutex_destroy(&ens->groups_mutex);
+    pthread_rwlock_destroy(&ens->groups_lock);
     free(ens);
 }
 
@@ -191,10 +206,12 @@ ens_init() {
         return NULL;
     }
 
-    ens->log_level = ENS_LOG_LEVEL_WARN;
-
-    if (pthread_mutex_init(&ens->groups_mutex, NULL) != 0) {
+    if (pthread_rwlock_init(&ens->groups_lock, NULL) != 0) {
+        ens_free(ens);
+        return NULL;
     }
+
+    ens->log_level = ENS_LOG_LEVEL_WARN;
 
     return ens;
 }
@@ -308,6 +325,12 @@ email_read(void *ptr, size_t size, size_t nmemb, void *user_data) {
             break;
     }
 
+    //TODO: Handle larger emails instead of aborting
+    if (buffer_length(context->buffer) > size * nmemb) {
+        ens_log(context->ens, ENS_ERROR_MEMORY, ENS_LOG_LEVEL_ERROR, "Failed to send email for group %d: The email is %u bytes but cURL's buffer is only %zu", context->group->id, buffer_length(context->buffer), size * nmemb);
+        return CURL_READFUNC_ABORT;
+    }
+
     memcpy(ptr, buffer_data(context->buffer), buffer_length(context->buffer));
 
     return buffer_length(context->buffer);
@@ -385,7 +408,8 @@ ens_send_email_file(ens_t *ens, ens_group_t *group) {
     time_t now;
     struct tm now_tm;
     char now_buf[32];
-    unsigned int i = 0;
+    const char *to;
+    unsigned int i;
 
     now = time(NULL);
     localtime_r(&now, &now_tm);
@@ -394,12 +418,20 @@ ens_send_email_file(ens_t *ens, ens_group_t *group) {
     while (queue_size(group->emails) > 0) {
         email = queue_pop(group->emails);
 
-        fprintf(group->f, "%s[%s]\n", i > 0 ? "\n" : "", now_buf);
-        fprintf(group->f, "%s\n\n", email->subject);
+        if (group->stats.emails_sent > 0) {
+            fprintf(group->f, "\n");
+        }
+
+        fprintf(group->f, "[%s]\n", now_buf);
+        for (i = 0; i < alist_size(group->to); i++) {
+            to = alist_get(group->to, i);
+            fprintf(group->f, "To: %s\n", to);
+        }
+        fprintf(group->f, "From: %s\n", group->from);
+        fprintf(group->f, "Subject: %s\n", email->subject);
         fprintf(group->f, "%s\n", email->body);
 
         ens_email_free(email);
-        ++i;
     }
 }
 
@@ -409,11 +441,13 @@ ens_check_groups(ens_t *ens) {
     unsigned int i;
     time_t now;
 
-    pthread_mutex_lock(&ens->groups_mutex);
+    pthread_rwlock_rdlock(&ens->groups_lock);
     for (i = 0; i < alist_size(ens->groups); i++) {
         group = alist_get(ens->groups, i);
 
         now = time(NULL);
+
+        pthread_mutex_lock(&group->emails_mutex);
         if (now >= group->expires && queue_size(group->emails) > 0) {
             if (group->f != NULL) {
                 ens_send_email_file(ens, group);
@@ -422,10 +456,12 @@ ens_check_groups(ens_t *ens) {
                 ens_send_email(ens, group);
             }
 
+            ++group->stats.emails_sent;
             group->expires = now + group->interval;
         }
+        pthread_mutex_unlock(&group->emails_mutex);
     }
-    pthread_mutex_unlock(&ens->groups_mutex);
+    pthread_rwlock_unlock(&ens->groups_lock);
 }
 
 static void *
@@ -548,7 +584,7 @@ ens_group_register(ens_t *ens, ens_group_id_t id) {
     int ret = ENS_ERROR_OK;
     ens_group_t *group;
 
-    pthread_mutex_lock(&ens->groups_mutex);
+    pthread_rwlock_wrlock(&ens->groups_lock);
     group = ens_group_find(ens, id);
     if (group != NULL) {
         ret = ens_log(ens, ENS_ERROR_ALREADY_REGISTERED, ENS_LOG_LEVEL_ERROR, "Failed to register group %d Already registered", id);
@@ -570,7 +606,7 @@ ens_group_register(ens_t *ens, ens_group_id_t id) {
     group->id = id;
 
 done:
-    pthread_mutex_unlock(&ens->groups_mutex);
+    pthread_rwlock_unlock(&ens->groups_lock);
 
     return ret;
 }
@@ -581,7 +617,7 @@ ens_group_unregister(ens_t *ens, ens_group_id_t id) {
     ens_group_t *group;
     unsigned int i;
 
-    pthread_mutex_lock(&ens->groups_mutex);
+    pthread_rwlock_wrlock(&ens->groups_lock);
     for (i = 0; i < alist_size(ens->groups); i++) {
         group = alist_get(ens->groups, i);
 
@@ -592,7 +628,7 @@ ens_group_unregister(ens_t *ens, ens_group_id_t id) {
             break;
         }
     }
-    pthread_mutex_unlock(&ens->groups_mutex);
+    pthread_rwlock_unlock(&ens->groups_lock);
 
     if (!found) {
         return ens_log(ens, ENS_ERROR_NOT_REGISTERED, ENS_LOG_LEVEL_ERROR, "Failed to unregister group %d: Not registered", id);
@@ -604,7 +640,7 @@ ens_group_unregister(ens_t *ens, ens_group_id_t id) {
 int
 ens_group_send(ens_t *ens, ens_group_id_t id, const char *subject, const char *body) {
     int ret = ENS_ERROR_OK;
-    time_t now;
+    bool success;
     ens_group_t *group;
     ens_email_t *email;
 
@@ -616,27 +652,36 @@ ens_group_send(ens_t *ens, ens_group_id_t id, const char *subject, const char *b
 
     email->subject = strdup(subject);
     email->body = strdup(body);
+    if (email->subject == NULL || email->body == NULL) {
+        ret = ens_log(ens, ENS_ERROR_MEMORY, ENS_LOG_LEVEL_FATAL, "Failed to send email for group %d: Out of memory", id);
+        goto done;
+    }
 
-    pthread_mutex_lock(&ens->groups_mutex);
+    pthread_rwlock_rdlock(&ens->groups_lock);
     group = ens_group_find(ens, id);
     if (group == NULL) {
         ret = ens_log(ens, ENS_ERROR_NOT_REGISTERED, ENS_LOG_LEVEL_ERROR, "Failed to send email for group %d: Not registered", id);
         goto done;
     }
 
-    now = time(NULL);
+    ++group->stats.emails_total;
+
     if (group->mode == ENS_GROUP_MODE_DROP && queue_size(group->emails) > 0) {
         ret = ENS_ERROR_NOT_READY;
         goto done;
     }
 
-    if (!queue_push(group->emails, email)) {
+    pthread_mutex_lock(&group->emails_mutex);
+    success = queue_push(group->emails, email);
+    pthread_mutex_unlock(&group->emails_mutex);
+
+    if (!success) {
         ret = ens_log(ens, ENS_ERROR_MEMORY, ENS_LOG_LEVEL_FATAL, "Failed to send email for group %d: Out of memory", id);
         goto done;
     }
 
 done:
-    pthread_mutex_unlock(&ens->groups_mutex);
+    pthread_rwlock_unlock(&ens->groups_lock);
     if (ret != ENS_ERROR_OK) {
         ens_email_free(email);
     }
@@ -852,7 +897,7 @@ ens_group_set_option(ens_t *ens, ens_group_id_t id, ens_group_option_t option, .
     va_list ap;
 
     va_start(ap, option);
-    pthread_mutex_lock(&ens->groups_mutex);
+    pthread_rwlock_rdlock(&ens->groups_lock);
 
     group = ens_group_find(ens, id);
     if (group == NULL) {
@@ -891,7 +936,7 @@ ens_group_set_option(ens_t *ens, ens_group_id_t id, ens_group_option_t option, .
     }
 
 done:
-    pthread_mutex_unlock(&ens->groups_mutex);
+    pthread_rwlock_unlock(&ens->groups_lock);
     va_end(ap);
 
     return ret;

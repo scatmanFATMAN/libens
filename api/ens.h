@@ -32,9 +32,7 @@
 /**
  * Error codes.
  */
-#define ENS_ERROR_NOT_READY            (-1) //!< The group is operating in ENS_GROUP_MODE_DROP
-                                            //!< and an email tried to be sent but the interval
-                                            //!< didn't expire yet.
+#define ENS_ERROR_NOT_READY            (-1) //!< The group's interval hasn't expired yet.
 #define ENS_ERROR_OK                   0    //!< The operation completed successfully.
 #define ENS_ERROR_MEMORY               1    //!< A dynamic memory allocation failed.
 #define ENS_ERROR_ALREADY_REGISTERED   2    //!< The group is already registered.
@@ -45,8 +43,7 @@
 #define ENS_ERROR_UNKNOWN_OPTION_VALUE 7    //!< Unknown option.
 #define ENS_ERROR_EMAIL_FAILED         8    //!< The email failed to send.
 #define ENS_ERROR_TOO_LONG             9    //!< A value for an option was too long.
-#define ENS_ERROR_FILE_OPEN            10   //!< The group is writing to a file but the file
-                                            //!< couldn't be opened.
+#define ENS_ERROR_FILE_OPEN            10   //!< The group is writing to a file but the file couldn't be opened.
 #define ENS_ERROR_THREAD               11   //!< The ENS context's thread couldn't be started.
 
 /**

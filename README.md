@@ -1,9 +1,9 @@
 # libens
 Email Notification System
 
-A library that provides application level email logging. The main goal of this library is to provide functionality to programmers for sending log type emails in their programs. The library handles the logic which determines  when emails should be sent and can operate in two modes as described in the next section.
+A library that provides application level email logging. The main goal of this library is to provide functionality to programmers for sending log type emails in their programs. The library handles the logic which determines when emails should be sent and can operate in two modes as described in the next section.
 
-ENS is configured by groupings. Each group has their own set of characteristics so emails can be controlled in each group individually.
+ENS is configured by groupings. Each group has their own set of characteristics so emails can be controlled in each group individually. Therefore, each group has their own timers and do not affect the other groups.
 
 ---------------------------------------------------------------------------
 ENS_GROUP_MODE_DROP
@@ -53,7 +53,7 @@ Send an email only every 10 seconds
 int main(int argc, char **argv) {
     ens_t *ens;
 
-    ens = ens_init();`
+    ens = ens_init();
     ens_group_register(ens, 1);
     ens_group_set_option(ens, 1, ENS_GROUP_OPTION_MODE, ENS_GROUP_MODE_DROP);
     ens_group_set_option(ens, 1, ENS_GROUP_OPTION_HOST, "smtp.server.com:587");
@@ -76,7 +76,7 @@ Send an email only every 10 seconds. However, any email that was attempted to be
 int main(int argc, char **argv) {
     ens_t *ens;
 
-    ens = ens_init();`
+    ens = ens_init();
     ens_group_register(ens, 1);
     ens_group_set_option(ens, 1, ENS_GROUP_OPTION_COLLECT, ENS_GROUP_MODE_DROP);
     ens_group_set_option(ens, 1, ENS_GROUP_OPTION_HOST, "smtp.server.com:587");

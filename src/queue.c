@@ -121,7 +121,7 @@ queue_pop(queue_t *queue) {
     }
     else {
         queue->head = node->next;
-        node->prev = NULL;
+        queue->head->prev = NULL;
     }
 
     free(node);
