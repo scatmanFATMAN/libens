@@ -110,7 +110,7 @@ main(int argc, char **argv) {
     ens_group_send(ens, 1, "Group 1: Collect", "This should be the only email for the next 5 secoods");
 
     printf("Sending group 2 (drop) email and 5 more right after. Only the first email should go through\n");
-    ens_group_send(ens, 2, "Group 2: Drop", "This should be the only email even after attempting to send a few more immediately sine they're being dropped");
+    ens_group_send(ens, 2, "Group 2: Drop", "This should be the only email even after attempting to send a few more immediately since they're being dropped");
     ens_group_send(ens, 2, "Group 2: Drop", "drop me");
     ens_group_send(ens, 2, "Group 2: Drop", "drop me");
     ens_group_send(ens, 2, "Group 2: Drop", "drop me");

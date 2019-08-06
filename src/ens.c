@@ -16,7 +16,7 @@
 #include "../api/ens.h"
 
 #define ENS_VERSION_MAJOR 0
-#define ENS_VERSION_MINOR 1
+#define ENS_VERSION_MINOR 2
 #define ENS_VERSION_PATCH 0
 
 #define ENS_HOST_MAX_LEN     255
@@ -36,7 +36,7 @@ typedef struct {
     time_t interval;
     volatile time_t expires;
     alist_t *to;
-    char host[ENS_HOST_MAX_LEN - 7 + 1]; //save from for smtp://
+    char host[ENS_HOST_MAX_LEN - 7 + 1]; //save room for smtp://
     char from[ENS_FROM_MAX_LEN + 1];
     char username[ENS_USERNAME_MAX_LEN + 1];
     char password[ENS_PASSWORD_MAX_LEN + 1];
@@ -92,8 +92,6 @@ ens_group_free(ens_group_t *group) {
 
     alist_free_func(group->to, free);
     queue_free_func(group->emails, free);
-    munlock(group->username, sizeof(group->username));
-    munlock(group->password, sizeof(group->password));
 
     if (group->f != NULL) {
         fclose(group->f);
@@ -103,6 +101,9 @@ ens_group_free(ens_group_t *group) {
 
     //make sure we zero out the memory before free'ing since it's possible we have usernames and passwords in memory
     memset(group, 0, sizeof(*group));
+
+    munlock(group->username, sizeof(group->username));
+    munlock(group->password, sizeof(group->password));
     free(group);
 }
 
@@ -239,6 +240,7 @@ ens_log(ens_t *ens, int err, int level, const char *fmt, ...) {
 //TODO: Need to do multiple writes if the email is bigger than size * nmemb bytes.
 static size_t
 email_read(void *ptr, size_t size, size_t nmemb, void *user_data) {
+    bool success;
     unsigned int i;
     ens_email_t *email;
     ens_curl_context_t *context;
@@ -265,61 +267,44 @@ email_read(void *ptr, size_t size, size_t nmemb, void *user_data) {
     //write the subject
     switch (context->group->mode) {
         case ENS_GROUP_MODE_DROP:
-            email = queue_peek(context->group->emails);
-
-            if (!buffer_writef(context->buffer, "Subject: %s\r\n", email->subject)) {
-                ens_log(context->ens, ENS_ERROR_MEMORY, ENS_LOG_LEVEL_FATAL, "Failed to send email for group %d: Out of memory", context->group->id);
-                return CURL_READFUNC_ABORT;
-            }
-
-            break;
-        case ENS_GROUP_MODE_COLLECT:
-            if (!buffer_writef(context->buffer, "Subject: %u Emails\r\n", queue_size(context->group->emails))) {
-                ens_log(context->ens, ENS_ERROR_MEMORY, ENS_LOG_LEVEL_FATAL, "Failed to send email for group %d: Out of memory", context->group->id);
-                return CURL_READFUNC_ABORT;
-            }
-
-            break;
-    }
-
-    //write the body, which is separated by another terminator
-    if (!buffer_writef(context->buffer, "\r\n")) {
-        ens_log(context->ens, ENS_ERROR_MEMORY, ENS_LOG_LEVEL_FATAL, "Failed to send email for group %d: Out of memory", context->group->id);
-        return CURL_READFUNC_ABORT;
-    }
-
-    switch (context->group->mode) {
-        case ENS_GROUP_MODE_DROP:
             email = queue_pop(context->group->emails);
 
-            if (!buffer_writef(context->buffer, "%s\n", email->body)) {
+            success = buffer_writef(context->buffer, "Subject: %s\r\n", email->subject) &&
+                      buffer_writef(context->buffer, "\r\n") &&
+                      buffer_writef(context->buffer, "%s\n", email->body);
+
+            ens_email_free(email);
+
+            if (!success) {
                 ens_log(context->ens, ENS_ERROR_MEMORY, ENS_LOG_LEVEL_FATAL, "Failed to send email for group %d: Out of memory", context->group->id);
                 return CURL_READFUNC_ABORT;
             }
 
-            ens_email_free(email);
             break;
         case ENS_GROUP_MODE_COLLECT:
-            while (queue_size(context->group->emails) > 0) {
+            i = 0;
+
+            success = buffer_writef(context->buffer, "Subject: %u Emails\r\n", queue_size(context->group->emails)) &&
+                      buffer_writef(context->buffer, "\r\n");
+
+            while (success && queue_size(context->group->emails) > 0) {
                 email = queue_pop(context->group->emails);
+
                 if (i > 0) {
-                    if (!buffer_writef(context->buffer, "\n\n")) {
-                        ens_log(context->ens, ENS_ERROR_MEMORY, ENS_LOG_LEVEL_FATAL, "Failed to send email for group %d: Out of memory", context->group->id);
-                        return CURL_READFUNC_ABORT;
-                    }
+                    success = buffer_writef(context->buffer, "\n\n");
                 }
 
-                if (!buffer_writef(context->buffer, "Subject: %s\n", email->subject)) {
-                    ens_log(context->ens, ENS_ERROR_MEMORY, ENS_LOG_LEVEL_FATAL, "Failed to send email for group %d: Out of memory", context->group->id);
-                    return CURL_READFUNC_ABORT;
-                }
-
-                if (!buffer_writef(context->buffer, "%s", email->body)) {
-                    ens_log(context->ens, ENS_ERROR_MEMORY, ENS_LOG_LEVEL_FATAL, "Failed to send email for group %d: Out of memory", context->group->id);
-                    return CURL_READFUNC_ABORT;
+                if (success) {
+                    success = buffer_writef(context->buffer, "Subject: %s\n", email->subject) &&
+                              buffer_writef(context->buffer, "%s", email->body);
                 }
 
                 ens_email_free(email);
+
+                if (!success) {
+                    ens_log(context->ens, ENS_ERROR_MEMORY, ENS_LOG_LEVEL_FATAL, "Failed to send email for group %d: Out of memory", context->group->id);
+                    return CURL_READFUNC_ABORT;
+                }
             }
 
             break;
