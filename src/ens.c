@@ -31,29 +31,34 @@ typedef struct {
 } ens_group_stats_t;
 
 typedef struct {
-    ens_group_id_t id;
     int mode;
     time_t interval;
-    volatile time_t expires;
     alist_t *to;
     char host[ENS_HOST_MAX_LEN - 7 + 1]; //save room for smtp://
     char from[ENS_FROM_MAX_LEN + 1];
     char username[ENS_USERNAME_MAX_LEN + 1];
     char password[ENS_PASSWORD_MAX_LEN + 1];
-    FILE *f;
-    char f_path[ENS_PATH_MAX_LEN + 1];
+    char ca_path[ENS_PATH_MAX_LEN + 1];
+} ens_config_t;
+
+typedef struct {
+    ens_group_id_t id;
+    ens_config_t config;
+    volatile time_t expires;
     ens_group_stats_t stats;
     queue_t *emails;
     pthread_mutex_t emails_mutex;
+    char f_path[ENS_PATH_MAX_LEN + 1];
+    FILE *f;
 } ens_group_t;
 
 struct ens_t {
+    ens_config_t config;
     ens_log_function_t log_function;
     int log_level;
     void *log_user_data;
     volatile bool running;
     pthread_t thread;
-    char ca_path[ENS_PATH_MAX_LEN + 1];
     alist_t *groups;
     pthread_rwlock_t groups_lock;
 };
@@ -90,8 +95,20 @@ ens_group_free(ens_group_t *group) {
         return;
     }
 
-    alist_free_func(group->to, free);
-    queue_free_func(group->emails, free);
+    if (group->config.to != NULL) {
+        alist_free_func(group->config.to, free);
+    }
+
+    //zero out sensitive memory before unlocking the pages
+    memset(group->config.username, 0, sizeof(group->config.username));
+    memset(group->config.password, 0, sizeof(group->config.password));
+
+    munlock(group->config.username, sizeof(group->config.username));
+    munlock(group->config.password, sizeof(group->config.password));
+
+    if (group->emails != NULL) {
+        queue_free_func(group->emails, free);
+    }
 
     if (group->f != NULL) {
         fclose(group->f);
@@ -99,48 +116,79 @@ ens_group_free(ens_group_t *group) {
 
     pthread_mutex_destroy(&group->emails_mutex);
 
-    //make sure we zero out the memory before free'ing since it's possible we have usernames and passwords in memory
-    memset(group, 0, sizeof(*group));
-
-    munlock(group->username, sizeof(group->username));
-    munlock(group->password, sizeof(group->password));
     free(group);
 }
 
 static ens_group_t *
 ens_group_init(ens_t *ens) {
     ens_group_t *group;
+    unsigned int i;
+    char *to;
 
     group = calloc(1, sizeof(*group));
     if (group == NULL) {
         return NULL;
     }
 
-    group->mode = ENS_GROUP_MODE_DEFAULT;
-    group->interval = ENS_GROUP_INTERVAL_DEFAULT;
-    group->to = alist_init();
+    group->config.mode = ens->config.mode;
+    group->config.interval = ens->config.interval;
+
+    group->config.to = alist_init();
+    if (group->config.to == NULL) {
+        goto fail;
+    }
+    for (i = 0; i < alist_size(ens->config.to); i++) {
+        to = strdup(alist_get(ens->config.to, i));
+        if (to == NULL) {
+            goto fail;
+        }
+
+        if (!alist_add(group->config.to, to)) {
+            free(to);
+            goto fail;
+        }
+    }
+
+    if (ens->config.host[0] != '\0') {
+        strcpy(group->config.host, ens->config.host);
+    }
+
+    if (ens->config.from[0] != '\0') {
+        strcpy(group->config.from, ens->config.from);
+    }
+
+    if (mlock(group->config.username, sizeof(group->config.username)) != 0) {
+        goto fail;
+    }
+    if (ens->config.username[0] != '\0') {
+        strcpy(group->config.username, ens->config.username);
+    }
+
+    if (mlock(group->config.password, sizeof(group->config.password)) != 0) {
+        goto fail;
+    }
+    if (ens->config.password[0] != '\0') {
+        strcpy(group->config.password, ens->config.password);
+    }
+
+    if (ens->config.ca_path[0] != '\0') {
+        strcpy(group->config.ca_path, ens->config.ca_path);
+    }
+
     group->emails = queue_init();
-    if (group->to == NULL || group->emails == NULL) {
-        ens_group_free(group);
-        return NULL;
-    }
-
-    if (mlock(group->username, sizeof(group->username)) != 0) {
-        ens_group_free(group);
-        return NULL;
-    }
-
-    if (mlock(group->password, sizeof(group->password)) != 0) {
-        ens_group_free(group);
-        return NULL;
+    if (group->emails == NULL) {
+        goto fail;
     }
 
     if (pthread_mutex_init(&group->emails_mutex, NULL) != 0) {
-        ens_group_free(group);
-        return NULL;
+        goto fail;
     }
 
     return group;
+
+fail:
+    ens_group_free(group);
+    return NULL;
 }
 
 static ens_email_t *
@@ -180,6 +228,17 @@ ens_free(ens_t *ens) {
         return;
     }
 
+    if (ens->config.to != NULL) {
+        alist_free_func(ens->config.to, free);
+    }
+
+    //zero sensitive fields before unlocking pages
+    memset(ens->config.username, 0, sizeof(ens->config.username));
+    memset(ens->config.password, 0, sizeof(ens->config.password));
+
+    munlock(ens->config.username, sizeof(ens->config.username));
+    munlock(ens->config.password, sizeof(ens->config.password));
+
     if (ens->groups != NULL) {
         for (i = 0; i < alist_size(ens->groups); i++) {
             group = alist_get(ens->groups, i);
@@ -189,6 +248,7 @@ ens_free(ens_t *ens) {
     }
 
     pthread_rwlock_destroy(&ens->groups_lock);
+
     free(ens);
 }
 
@@ -201,20 +261,34 @@ ens_init() {
         return NULL;
     }
 
+    ens->config.mode = ENS_GROUP_MODE_DROP;
+    ens->config.interval = 30;
+    ens->config.to = alist_init();
+    if (ens->config.to == NULL) {
+        goto fail;
+    }
+    if (mlock(ens->config.username, sizeof(ens->config.username)) != 0) {
+        goto fail;
+    }
+    if (mlock(ens->config.password, sizeof(ens->config.password)) != 0) {
+        goto fail;
+    }
+    ens->log_level = ENS_LOG_LEVEL_WARN;
+
     ens->groups = alist_init(ens->groups);
     if (ens->groups == NULL) {
-        ens_free(ens);
-        return NULL;
+        goto fail;
     }
 
     if (pthread_rwlock_init(&ens->groups_lock, NULL) != 0) {
-        ens_free(ens);
-        return NULL;
+        goto fail;
     }
 
-    ens->log_level = ENS_LOG_LEVEL_WARN;
-
     return ens;
+
+fail:
+    ens_free(ens);
+    return NULL;
 }
 
 static int
@@ -251,21 +325,21 @@ email_read(void *ptr, size_t size, size_t nmemb, void *user_data) {
     }
 
     //write each recipient
-    for (i = 0; i < alist_size(context->group->to); i++) {
-        if (!buffer_writef(context->buffer, "To: %s\r\n", alist_get(context->group->to, i))) {
+    for (i = 0; i < alist_size(context->group->config.to); i++) {
+        if (!buffer_writef(context->buffer, "To: %s\r\n", alist_get(context->group->config.to, i))) {
             ens_log(context->ens, ENS_ERROR_MEMORY, ENS_LOG_LEVEL_FATAL, "Failed to send email for group %d: Out of memory", context->group->id);
             return CURL_READFUNC_ABORT;
         }
     }
 
     //write the sender
-    if (!buffer_writef(context->buffer, "From: %s\r\n", context->group->from)) {
+    if (!buffer_writef(context->buffer, "From: %s\r\n", context->group->config.from)) {
         ens_log(context->ens, ENS_ERROR_MEMORY, ENS_LOG_LEVEL_FATAL, "Failed to send email for group %d: Out of memory", context->group->id);
         return CURL_READFUNC_ABORT;
     }
 
     //write the subject
-    switch (context->group->mode) {
+    switch (context->group->config.mode) {
         case ENS_GROUP_MODE_DROP:
             email = queue_pop(context->group->emails);
 
@@ -340,23 +414,23 @@ ens_send_email(ens_t *ens, ens_group_t *group) {
         return;
     }
 
-    for (i = 0; i < alist_size(group->to); i++) {
-        to = curl_slist_append(to, alist_get(group->to, i));
+    for (i = 0; i < alist_size(group->config.to); i++) {
+        to = curl_slist_append(to, alist_get(group->config.to, i));
     }
 
     curl = curl_easy_init();
-    curl_easy_setopt(curl, CURLOPT_URL, group->host);
-    curl_easy_setopt(curl, CURLOPT_MAIL_FROM, group->from);
+    curl_easy_setopt(curl, CURLOPT_URL, group->config.host);
+    curl_easy_setopt(curl, CURLOPT_MAIL_FROM, group->config.from);
     curl_easy_setopt(curl, CURLOPT_MAIL_RCPT, to);
-    if (group->username[0] != '\0') {
-        curl_easy_setopt(curl, CURLOPT_USERNAME, group->username);
+    if (group->config.username[0] != '\0') {
+        curl_easy_setopt(curl, CURLOPT_USERNAME, group->config.username);
     }
-    if (group->password[0] != '\0') {
-        curl_easy_setopt(curl, CURLOPT_PASSWORD, group->password);
+    if (group->config.password[0] != '\0') {
+        curl_easy_setopt(curl, CURLOPT_PASSWORD, group->config.password);
     }
-    if (ens->ca_path[0] != '\0') {
+    if (group->config.ca_path[0] != '\0') {
         curl_easy_setopt(curl, CURLOPT_USE_SSL, (long)CURLUSESSL_ALL);
-        curl_easy_setopt(curl, CURLOPT_CAINFO, ens->ca_path);
+        curl_easy_setopt(curl, CURLOPT_CAINFO, group->config.ca_path);
     }
     curl_easy_setopt(curl, CURLOPT_READFUNCTION, email_read);
     curl_easy_setopt(curl, CURLOPT_READDATA, &context);
@@ -387,7 +461,7 @@ ens_send_email(ens_t *ens, ens_group_t *group) {
 }
 
 //TODO: error handling for fprintf?
-static void
+static int
 ens_send_email_file(ens_t *ens, ens_group_t *group) {
     ens_email_t *email;
     time_t now;
@@ -395,6 +469,13 @@ ens_send_email_file(ens_t *ens, ens_group_t *group) {
     char now_buf[32];
     const char *to;
     unsigned int i;
+
+    if (group->f == NULL) {
+        group->f = fopen(group->f_path, "w");
+        if (group->f == NULL) {
+            return ens_log(ens, ENS_ERROR_FILE, ENS_LOG_LEVEL_ERROR, "Failed to write to file for group %d: Could not open file: %s", group->id, strerror(errno));
+        }
+    }
 
     now = time(NULL);
     localtime_r(&now, &now_tm);
@@ -408,16 +489,18 @@ ens_send_email_file(ens_t *ens, ens_group_t *group) {
         }
 
         fprintf(group->f, "[%s]\n", now_buf);
-        for (i = 0; i < alist_size(group->to); i++) {
-            to = alist_get(group->to, i);
+        for (i = 0; i < alist_size(group->config.to); i++) {
+            to = alist_get(group->config.to, i);
             fprintf(group->f, "To: %s\n", to);
         }
-        fprintf(group->f, "From: %s\n", group->from);
+        fprintf(group->f, "From: %s\n", group->config.from);
         fprintf(group->f, "Subject: %s\n", email->subject);
         fprintf(group->f, "%s\n", email->body);
 
         ens_email_free(email);
     }
+
+    return ENS_ERROR_OK;
 }
 
 static void
@@ -442,7 +525,7 @@ ens_check_groups(ens_t *ens) {
             }
 
             ++group->stats.emails_sent;
-            group->expires = now + group->interval;
+            group->expires = now + group->config.interval;
         }
         pthread_mutex_unlock(&group->emails_mutex);
     }
@@ -467,42 +550,15 @@ ens_process(void *user_data) {
 int
 ens_start(ens_t *ens) {
     int ret = ENS_ERROR_OK;
-    ens_group_t *group;
-    unsigned int i;
 
     if (ens->running) {
         return ENS_ERROR_ALREADY_RUNNING;
-    }
-
-    //if any groups are writing to a file, open them now
-    for (i = 0; i < alist_size(ens->groups); i++) {
-        group = alist_get(ens->groups, i);
-
-        if (group->f_path[0] != '\0') {
-            group->f = fopen(group->f_path, "w");
-            if (group->f == NULL) {
-                ret = ens_log(ens, ENS_ERROR_FILE_OPEN, ENS_LOG_LEVEL_ERROR, "Failed to open file: %s", strerror(errno));
-                break;
-            }
-        }
     }
 
     //start the context's thread
     if (ret == ENS_ERROR_OK) {
         if (pthread_create(&ens->thread, NULL, ens_process, ens) != 0) {
             ret = ens_log(ens, ENS_ERROR_THREAD, ENS_LOG_LEVEL_FATAL, "Failed to start the thread: %s", strerror(errno));
-        }
-    }
-
-    //stay squeaky clean...
-    if (ret != ENS_ERROR_OK) {
-        for (i = 0; i < alist_size(ens->groups); i++) {
-            group = alist_get(ens->groups, i);
-
-            if (group->f != NULL) {
-                fclose(group->f);
-                group->f = NULL;
-            }
         }
     }
 
@@ -535,7 +591,6 @@ ens_stop_helper(ens_t *ens, bool join) {
     }
 
     return ENS_ERROR_OK;
-
 }
 
 int
@@ -651,7 +706,7 @@ ens_group_send(ens_t *ens, ens_group_id_t id, const char *subject, const char *b
 
     ++group->stats.emails_total;
 
-    if (group->mode == ENS_GROUP_MODE_DROP && queue_size(group->emails) > 0) {
+    if (group->config.mode == ENS_GROUP_MODE_DROP && queue_size(group->emails) > 0) {
         ret = ENS_ERROR_NOT_READY;
         goto done;
     }
@@ -695,6 +750,121 @@ ens_group_sendf(ens_t *ens, ens_group_id_t id, const char *subject, const char *
 }
 
 static int
+ens_set_option_mode(ens_t *ens, va_list ap) {
+    int mode, ret = ENS_ERROR_OK;
+
+    mode = va_arg(ap, int);
+
+    switch (mode) {
+        case ENS_GROUP_MODE_DROP:
+        case ENS_GROUP_MODE_COLLECT:
+            ens->config.mode = mode;
+            break;
+        default:
+            ret = ens_log(ens, ENS_ERROR_UNKNOWN_OPTION_VALUE, ENS_LOG_LEVEL_ERROR, "Failed to set option ENS_OPTION_MODE: Unknown value");
+            break;
+    }
+
+    return ret;
+}
+
+static int
+ens_set_option_host(ens_t *ens, va_list ap) {
+    const char *host;
+
+    host = va_arg(ap, const char *);
+
+    if (strlen(host) > ENS_HOST_MAX_LEN) {
+        return ens_log(ens, ENS_ERROR_TOO_LONG, ENS_LOG_LEVEL_ERROR, "Failed to set option ENS_OPTION_HOST: Value must not exceed %d characters", ENS_HOST_MAX_LEN);
+    }
+
+    snprintf(ens->config.host, sizeof(ens->config.host), "smtp://%s", host);
+
+    return ENS_ERROR_OK;
+}
+
+
+static int
+ens_set_option_from(ens_t *ens, va_list ap) {
+    const char *from;
+
+    from = va_arg(ap, const char *);
+
+    if (strlen(from) > ENS_FROM_MAX_LEN) {
+        return ens_log(ens, ENS_ERROR_TOO_LONG, ENS_LOG_LEVEL_ERROR, "Failed to set option ENS_OPTION_FROM: Value must not exceed %d characters", ENS_FROM_MAX_LEN);
+    }
+
+    strcpy(ens->config.from, from);
+
+    return ENS_ERROR_OK;
+}
+
+static int
+ens_set_option_to(ens_t *ens, va_list ap) {
+    char *to_copy;
+    const char *to;
+
+    to = va_arg(ap, const char *);
+
+    to_copy = strdup(to);
+    if (to_copy == NULL) {
+        return ens_log(ens, ENS_ERROR_MEMORY, ENS_LOG_LEVEL_FATAL, "Failed to set option ENS_OPTION_TO: Out of memory");
+    }
+
+    if (!alist_add(ens->config.to, to_copy)) {
+        free(to_copy);
+        return ens_log(ens, ENS_ERROR_MEMORY, ENS_LOG_LEVEL_FATAL, "Failed to set option ENS_OPTION_TO: Out of memory");
+    }
+
+    return ENS_ERROR_OK;
+}
+
+static int
+ens_set_option_username(ens_t *ens, va_list ap) {
+    const char *username;
+
+    username = va_arg(ap, const char *);
+
+    if (strlen(username) > ENS_USERNAME_MAX_LEN) {
+        return ens_log(ens, ENS_ERROR_TOO_LONG, ENS_LOG_LEVEL_ERROR, "Failed to set option ENS_OPTION_USERNAME: Value must not exceed %d characters", ENS_USERNAME_MAX_LEN);
+    }
+
+    strcpy(ens->config.username, username);
+
+    return ENS_ERROR_OK;
+}
+
+static int
+ens_set_option_password(ens_t *ens, va_list ap) {
+    const char *password;
+
+    password = va_arg(ap, const char *);
+
+    if (strlen(password) > ENS_PASSWORD_MAX_LEN) {
+        return ens_log(ens, ENS_ERROR_TOO_LONG, ENS_LOG_LEVEL_ERROR, "Failed to set option ENS_OPTION_PASSWORD: Value must not exceed %d characters", ENS_PASSWORD_MAX_LEN);
+    }
+
+    strcpy(ens->config.password, password);
+
+    return ENS_ERROR_OK;
+}
+
+static int
+ens_set_option_ca_path(ens_t *ens, va_list ap) {
+    const char *ca_path;
+
+    ca_path = va_arg(ap, const char *);
+
+    if (strlen(ca_path) > ENS_PATH_MAX_LEN) {
+        return ens_log(ens, ENS_ERROR_TOO_LONG, ENS_LOG_LEVEL_ERROR, "Failed to set option ENS_OPTION_CA_PATH: Value must not exceed %d characters", ENS_PATH_MAX_LEN);
+    }
+
+    strcpy(ens->config.ca_path, ca_path);
+
+    return ENS_ERROR_OK;
+}
+
+static int
 ens_set_option_log_function(ens_t *ens, va_list ap) {
     ens->log_function = va_arg(ap, ens_log_function_t);
 
@@ -715,21 +885,6 @@ ens_set_option_log_user_data(ens_t *ens, va_list ap) {
     return ENS_ERROR_OK;
 }
 
-static int
-ens_set_option_ca_path(ens_t *ens, va_list ap) {
-    const char *ca_path;
-
-    ca_path = va_arg(ap, const char *);
-
-    if (strlen(ca_path) > ENS_PATH_MAX_LEN) {
-        return ens_log(ens, ENS_ERROR_TOO_LONG, ENS_LOG_LEVEL_ERROR, "Failed to set option ENS_OPTION_CA_PATH: Value must not exceed %d characters", ENS_PATH_MAX_LEN);
-    }
-
-    strcpy(ens->ca_path, ca_path);
-
-    return ENS_ERROR_OK;
-}
-
 int
 ens_set_option(ens_t *ens, ens_option_t option, ...) {
     int ret = ENS_ERROR_OK;
@@ -738,6 +893,30 @@ ens_set_option(ens_t *ens, ens_option_t option, ...) {
     va_start(ap, option);
 
     switch (option) {
+        case ENS_OPTION_MODE:
+            ret = ens_set_option_mode(ens, ap);
+            break;
+        case ENS_OPTION_HOST:
+            ret = ens_set_option_host(ens, ap);
+            break;
+        case ENS_OPTION_FROM:
+            ret = ens_set_option_from(ens, ap);
+            break;
+        case ENS_OPTION_TO:
+            ret = ens_set_option_to(ens, ap);
+            break;
+        case ENS_OPTION_USERNAME:
+            ret = ens_set_option_username(ens, ap);
+            break;
+        case ENS_OPTION_PASSWORD:
+            ret = ens_set_option_password(ens, ap);
+            break;
+        case ENS_OPTION_INTERVAL:
+            ens->config.interval = va_arg(ap, int);
+            break;
+        case ENS_OPTION_CA_PATH:
+            ret = ens_set_option_ca_path(ens, ap);
+            break;
         case ENS_OPTION_LOG_FUNCTION:
             ret = ens_set_option_log_function(ens, ap);
             break;
@@ -746,9 +925,6 @@ ens_set_option(ens_t *ens, ens_option_t option, ...) {
             break;
         case ENS_OPTION_LOG_USER_DATA:
             ret = ens_set_option_log_user_data(ens, ap);
-            break;
-        case ENS_OPTION_CA_PATH:
-            ret = ens_set_option_ca_path(ens, ap);
             break;
         default:
             ret = ens_log(ens, ENS_ERROR_UNKNOWN_OPTION, ENS_LOG_LEVEL_ERROR, "Failed to set option: Option %d not found", option);
@@ -769,7 +945,7 @@ ens_group_set_option_mode(ens_t *ens, ens_group_t *group, va_list ap) {
     switch (mode) {
         case ENS_GROUP_MODE_DROP:
         case ENS_GROUP_MODE_COLLECT:
-            group->mode = mode;
+            group->config.mode = mode;
             break;
         default:
             ret = ens_log(ens, ENS_ERROR_UNKNOWN_OPTION_VALUE, ENS_LOG_LEVEL_ERROR, "Failed to set option ENS_GROUP_OPTION_MODE for group %d: Unknown value", group->id);
@@ -789,7 +965,7 @@ ens_group_set_option_host(ens_t *ens, ens_group_t *group, va_list ap) {
         return ens_log(ens, ENS_ERROR_TOO_LONG, ENS_LOG_LEVEL_ERROR, "Failed to set option ENS_GROUP_OPTION_HOST for group %d: Value must not exceed %d characters", group->id, ENS_HOST_MAX_LEN);
     }
 
-    snprintf(group->host, sizeof(group->host), "smtp://%s", host);
+    snprintf(group->config.host, sizeof(group->config.host), "smtp://%s", host);
 
     return ENS_ERROR_OK;
 }
@@ -805,7 +981,7 @@ ens_group_set_option_from(ens_t *ens, ens_group_t *group, va_list ap) {
         return ens_log(ens, ENS_ERROR_TOO_LONG, ENS_LOG_LEVEL_ERROR, "Failed to set option ENS_GROUP_OPTION_FROM for group %d: Value must not exceed %d characters", group->id, ENS_FROM_MAX_LEN);
     }
 
-    strcpy(group->from, from);
+    strcpy(group->config.from, from);
 
     return ENS_ERROR_OK;
 }
@@ -822,7 +998,7 @@ ens_group_set_option_to(ens_t *ens, ens_group_t *group, va_list ap) {
         return ens_log(ens, ENS_ERROR_MEMORY, ENS_LOG_LEVEL_FATAL, "Failed to set option ENS_GROUP_OPTION_TO for group %d: Out of memory", group->id);
     }
 
-    if (!alist_add(group->to, to_copy)) {
+    if (!alist_add(group->config.to, to_copy)) {
         free(to_copy);
         return ens_log(ens, ENS_ERROR_MEMORY, ENS_LOG_LEVEL_FATAL, "Failed to set option ENS_GROUP_OPTION_TO for group %d: Out of memory", group->id);
     }
@@ -840,7 +1016,7 @@ ens_group_set_option_username(ens_t *ens, ens_group_t *group, va_list ap) {
         return ens_log(ens, ENS_ERROR_TOO_LONG, ENS_LOG_LEVEL_ERROR, "Failed to set option ENS_GROUP_OPTION_USERNAME for group %d: Value must not exceed %d characters", group->id, ENS_USERNAME_MAX_LEN);
     }
 
-    strcpy(group->username, username);
+    strcpy(group->config.username, username);
 
     return ENS_ERROR_OK;
 }
@@ -855,7 +1031,7 @@ ens_group_set_option_password(ens_t *ens, ens_group_t *group, va_list ap) {
         return ens_log(ens, ENS_ERROR_TOO_LONG, ENS_LOG_LEVEL_ERROR, "Failed to set option ENS_GROUP_OPTION_PASSWORD for group %d: Value must not exceed %d characters", group->id, ENS_PASSWORD_MAX_LEN);
     }
 
-    strcpy(group->password, password);
+    strcpy(group->config.password, password);
 
     return ENS_ERROR_OK;
 }
@@ -871,6 +1047,21 @@ ens_group_set_option_file(ens_t *ens, ens_group_t *group, va_list ap) {
     }
 
     strcpy(group->f_path, f_path);
+
+    return ENS_ERROR_OK;
+}
+
+static int
+ens_group_set_option_ca_path(ens_t *ens, ens_group_t *group, va_list ap) {
+    const char *ca_path;
+
+    ca_path = va_arg(ap, const char *);
+
+    if (strlen(ca_path) > ENS_PATH_MAX_LEN) {
+        return ens_log(ens, ENS_ERROR_TOO_LONG, ENS_LOG_LEVEL_ERROR, "Failed to set option ENS_GROUP_OPTION_CA_PATH for group %d: Value must not exceed %d characters", group->id, ENS_PATH_MAX_LEN);
+    }
+
+    strcpy(group->config.ca_path, ca_path);
 
     return ENS_ERROR_OK;
 }
@@ -910,10 +1101,13 @@ ens_group_set_option(ens_t *ens, ens_group_id_t id, ens_group_option_t option, .
             ret = ens_group_set_option_password(ens, group, ap);
             break;
         case ENS_GROUP_OPTION_INTERVAL:
-            group->interval = va_arg(ap, int);
+            group->config.interval = va_arg(ap, int);
             break;
         case ENS_GROUP_OPTION_FILE:
             ret = ens_group_set_option_file(ens, group, ap);
+            break;
+        case ENS_GROUP_OPTION_CA_PATH:
+            ret = ens_group_set_option_ca_path(ens, group, ap);
             break;
         default:
             ret = ens_log(ens, ENS_ERROR_UNKNOWN_OPTION, ENS_LOG_LEVEL_ERROR, "Failed to set option for group %d: Option %d not found", id, option);

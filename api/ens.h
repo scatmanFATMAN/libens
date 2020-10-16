@@ -40,11 +40,12 @@
 #define ENS_ERROR_ALREADY_RUNNING      4    //!< The ENS context's thread is already running.
 #define ENS_ERROR_NOT_RUNNING          5    //!< The ENG context's thread is not running.
 #define ENS_ERROR_UNKNOWN_OPTION       6    //!< Unknown option.
-#define ENS_ERROR_UNKNOWN_OPTION_VALUE 7    //!< Unknown option.
+#define ENS_ERROR_UNKNOWN_OPTION_VALUE 7    //!< Unknown value for option.
 #define ENS_ERROR_EMAIL_FAILED         8    //!< The email failed to send.
 #define ENS_ERROR_TOO_LONG             9    //!< A value for an option was too long.
 #define ENS_ERROR_FILE_OPEN            10   //!< The group is writing to a file but the file couldn't be opened.
 #define ENS_ERROR_THREAD               11   //!< The ENS context's thread couldn't be started.
+#define ENS_ERROR_FILE                 12   //!< There was an problem with opening or writing to a group's file.
 
 /**
  * Log levels.
@@ -60,9 +61,6 @@
  */
 #define ENS_GROUP_MODE_DROP    0                    //<! Drop messages between the interval.
 #define ENS_GROUP_MODE_COLLECT 1                    //!< Collect messages between the interval.
-#define ENS_GROUP_MODE_DEFAULT ENS_GROUP_MODE_DROP  //!< The default mode.
-
-#define ENS_GROUP_INTERVAL_DEFAULT 30   //!< The default interval.
 
 /**
  * The ENS context.
@@ -87,12 +85,17 @@ typedef void (*ens_log_function_t)(int level, const char *msg, void *user_data);
  * Options that effect the entire ENS context.
  */ 
 typedef enum {
-    ENS_OPTION_LOG_FUNCTION,    //!< Sets a callback function to for logging.
-    ENS_OPTION_LOG_LEVEL,       //!< Sets the maximum logging level for the
-                                //!< logging function.
-    ENS_OPTION_LOG_USER_DATA,   //!< Sets user data for the logging function.
-    ENS_OPTION_CA_PATH          //!< Sets the path for the certificate
-                                //!< authority.
+    ENS_OPTION_MODE,          //!< Sets the mode that the group operates in.
+    ENS_OPTION_HOST,          //!< Sets the SMTP host for this group.
+    ENS_OPTION_FROM,          //!< Sets who the emails are coming from for this group.
+    ENS_OPTION_TO,            //!< Sets who the emails are going to for this group.
+    ENS_OPTION_USERNAME,      //!< Sets the SMTP username credentials for this group.
+    ENS_OPTION_PASSWORD,      //!< Sets the SMTP password credentials for this group.
+    ENS_OPTION_INTERVAL,      //!< Sets the interval and which emails are sent for this group.
+    ENS_OPTION_CA_PATH,       //!< Sets the path for the certificate authority.
+    ENS_OPTION_LOG_FUNCTION,  //!< Sets a callback function to for logging.
+    ENS_OPTION_LOG_LEVEL,     //!< Sets the maximum logging level for the logging function.
+    ENS_OPTION_LOG_USER_DATA, //!< Sets user data for the logging function.
 } ens_option_t;
 
 /**
@@ -101,18 +104,13 @@ typedef enum {
 typedef enum {
     ENS_GROUP_OPTION_MODE,      //!< Sets the mode that the group operates in.
     ENS_GROUP_OPTION_HOST,      //!< Sets the SMTP host for this group.
-    ENS_GROUP_OPTION_FROM,      //!< Sets who the emails are coming from for
-                                //!< this group.
-    ENS_GROUP_OPTION_TO,        //!< Sets who the emails are going to for this
-                                //!< group.
-    ENS_GROUP_OPTION_USERNAME,  //!< Sets the SMTP username credentials for
-                                //!< this group.
-    ENS_GROUP_OPTION_PASSWORD,  //!< Sets the SMTP password credentials for
-                                //!< this group.
-    ENS_GROUP_OPTION_INTERVAL,  //!< Sets the interval and which emails are
-                                //!< sent for this group.
-    ENS_GROUP_OPTION_FILE       //!< Sets the file path to write emails to
-                                //!< instead of sending them.
+    ENS_GROUP_OPTION_FROM,      //!< Sets who the emails are coming from for this group.
+    ENS_GROUP_OPTION_TO,        //!< Sets who the emails are going to for this group.
+    ENS_GROUP_OPTION_USERNAME,  //!< Sets the SMTP username credentials for this group.
+    ENS_GROUP_OPTION_PASSWORD,  //!< Sets the SMTP password credentials for this group.
+    ENS_GROUP_OPTION_INTERVAL,  //!< Sets the interval and which emails are sent for this group.
+    ENS_GROUP_OPTION_FILE,      //!< Sets the file path to write emails to instead of sending them.
+    ENS_GROUP_OPTION_CA_PATH    //!< Sets the path for the certificate authority.
 } ens_group_option_t;
 
 /**
