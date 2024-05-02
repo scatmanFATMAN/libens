@@ -78,7 +78,7 @@ int main(int argc, char **argv) {
 
     ens = ens_init();
     ens_group_register(ens, 1);
-    ens_group_set_option(ens, 1, ENS_GROUP_OPTION_COLLECT, ENS_GROUP_MODE_DROP);
+    ens_group_set_option(ens, 1, ENS_GROUP_OPTION_MODE, ENS_GROUP_OPTION_COLLECT);
     ens_group_set_option(ens, 1, ENS_GROUP_OPTION_HOST, "smtp.server.com:587");
     ens_group_set_option(ens, 1, ENS_GROUP_OPTION_FROM, "scott.newman50@gmail.com");
     ens_group_set_option(ens, 1, ENS_GROUP_OPTION_TO, "some.email@domain.com");
